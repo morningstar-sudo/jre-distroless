@@ -23,7 +23,7 @@ Each also gets an immutable `<version>-<sha>-<date>` tag per daily build.
 | Base OS | Ubuntu | Debian 12 | Wolfi (Chainguard) |
 | Typical Trivy findings | dozens | ~76 (2 CRITICAL)* | **0** |
 | Shell / package manager | yes | no | no |
-| Size | ~260 MB | ~230 MB | **~83 MB** |
+| Size | ~260 MB | ~230 MB | **~113 MB (~42 MB pull)** |
 | Runs as non-root | no (root) | optional | yes (default) |
 
 \* measured July 2026; numbers drift as patches land.
@@ -48,9 +48,36 @@ CMD ["java", "-jar", "/app/app.jar"]
 
 No entrypoint is set — `CMD` is the full command (exec form required; there is no shell).
 
+## Included Java modules
+
+The default module set is built for typical server / web applications (Spring Boot, Quarkus, Micronaut — Tomcat, JPA/Hibernate, Security, JDBC, mail, JWT, S3, …). Verified with `java --list-modules`:
+
+| Module | Why it's included |
+|---|---|
+| `java.base` | Core runtime (always present) |
+| `java.desktop` | `java.beans.*` — Spring data binding (`PropertyEditor`), Hibernate, Jackson |
+| `java.datatransfer`, `java.prefs` | Pulled in transitively by `java.desktop` |
+| `java.logging` | JUL — bridged by Logback/Log4j |
+| `java.xml` | XML parsing — Tomcat, Spring, config parsing |
+| `java.naming` | JNDI — Tomcat, LDAP, datasource lookup |
+| `java.sql`, `java.sql.rowset`, `java.transaction.xa` | JDBC, connection pools (Hikari), JTA types |
+| `java.net.http` | Java 11+ HTTP client — SDKs (AWS, Google) |
+| `java.management`, `jdk.management` | JMX + OS metrics (CPU/memory MXBeans) — Actuator, monitoring agents |
+| `java.instrument` | Java agents — APM, Spring instrumentation |
+| `java.security.jgss` | Kerberos/GSS — PostgreSQL auth paths |
+| `java.security.sasl` | SASL — LDAP, Spring Security auth paths |
+| `jdk.crypto.ec` | Elliptic-curve TLS — most modern HTTPS endpoints |
+| `jdk.crypto.cryptoki` | PKCS#11 crypto provider |
+| `jdk.unsupported` | `sun.misc.Unsafe` — Netty, Hibernate, many libs |
+| `jdk.zipfs` | Jar-in-jar filesystem — Spring Boot loader, resource scanning |
+| `jdk.charsets` | Extended charsets — `spring-boot-starter-mail`, non-UTF-8 payloads |
+| `jdk.jfr` | Java Flight Recorder — low-overhead production profiling |
+
+Note: `java.desktop` provides the **classes** (headless). Actual GUI/font/image rendering (AWT, Swing) needs native fontconfig/freetype, which this base intentionally does not ship. Locale data beyond English is not included — add `jdk.localedata` with `--include-locales=<langs>` if you format dates/currency in other locales.
+
 ## Shrink the JRE to exactly your app's modules
 
-The default module set covers most server applications (no `java.desktop`). To trim further:
+To trim further (or extend):
 
 ```bash
 jdeps --print-module-deps --ignore-missing-deps app.jar
@@ -73,7 +100,7 @@ CI (`.github/workflows/build.yml`) builds a matrix of Java 17 / 21 / 25 on every
 ## FAQ
 
 **Why not just use `gcr.io/distroless/java17-debian12` (or java21)?**
-It ships graphics/font libraries (expat, glib, harfbuzz, libpng, lcms) for `java.desktop` that a headless server JRE never loads. In July 2026 it scanned at 76 CVEs, 2 CRITICAL. This image drops all of them.
+It ships native graphics/font libraries (expat, glib, harfbuzz, libpng, lcms) that a headless server JRE never loads. In July 2026 it scanned at 76 CVEs, 2 CRITICAL. This image keeps the `java.desktop` **module** (needed for `java.beans` / Spring) but drops all the native graphics libraries — and their CVEs.
 
 **Why can a Debian-based image never reach zero CVEs?**
 Debian marks many low-risk glibc/gcc CVEs as `affected`/`will_not_fix`, so scanners flag them forever regardless of updates. Wolfi rebuilds patched packages continuously, which is why Chainguard-based images scan clean.
@@ -82,7 +109,7 @@ Debian marks many low-risk glibc/gcc CVEs as `affected`/`will_not_fix`, so scann
 `docker debug <container>` (Docker Desktop), or `kubectl debug` with an ephemeral container on Kubernetes. The production image stays shell-free.
 
 **Does it work with Spring Boot / Quarkus / Micronaut?**
-Yes — any fat-jar server app. Check required modules with `jdeps` and pass them via `JAVA_MODULES`. Add `java.desktop` workloads (AWT, Swing, image processing) only with a base that provides fontconfig/freetype, e.g. `gcr.io/distroless/java-base-debian12`, accepting its CVEs.
+Yes — any fat-jar server app; the default module set already covers the common Spring Boot stack (web, JPA, security, mail, JDBC). Check exact modules with `jdeps` and pass them via `JAVA_MODULES` to trim. GUI/rendering workloads (AWT, Swing, image processing) need a base that provides fontconfig/freetype, e.g. `gcr.io/distroless/java-base-debian12`, accepting its CVEs.
 
 **How do I keep it at zero CVEs over time?**
 Rebuild regularly (the daily cron does this). For reproducible builds, pin both `FROM` images by digest (`@sha256:...`) and let Renovate/Dependabot bump the digests. Note the Chainguard free tier only offers the `latest` tag, which makes digest pinning more important.
