@@ -18,5 +18,4 @@ ENV PATH="$JAVA_HOME/bin:$PATH"
 COPY --from=jre-build /jre $JAVA_HOME
 
 USER nonroot
-ENTRYPOINT ["java"]
-CMD ["-version"]
+CMD ["java", "-version"]

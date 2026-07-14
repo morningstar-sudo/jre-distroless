@@ -35,7 +35,7 @@ Each also gets an immutable `<version>-<sha>-<date>` tag per daily build.
 ```bash
 # pick your LTS: 17 (default), 21 or 25
 docker build --build-arg JAVA_VERSION=21 -t jre-distroless:21 .
-docker run --rm jre-distroless:21 -version   # openjdk version "21.x"
+docker run --rm jre-distroless:21 java -version   # openjdk version "21.x"
 ```
 
 ## Use as a base image for your Java app
@@ -43,10 +43,10 @@ docker run --rm jre-distroless:21 -version   # openjdk version "21.x"
 ```dockerfile
 FROM ghcr.io/morningstar-sudo/jre-distroless:21
 COPY app.jar /app/app.jar
-CMD ["-jar", "/app/app.jar"]
+CMD ["java", "-jar", "/app/app.jar"]
 ```
 
-The entrypoint is `java`, so `CMD` takes plain JVM arguments.
+No entrypoint is set — `CMD` is the full command (exec form required; there is no shell).
 
 ## Shrink the JRE to exactly your app's modules
 
