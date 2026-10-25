@@ -90,7 +90,7 @@ jobs:
           cache-from: type=gha,scope=java-${{ matrix.java }}
           cache-to: type=gha,mode=max,scope=java-${{ matrix.java }}
 
-      - uses: sigstore/cosign-installer@v3
+      - uses: sigstore/cosign-installer@v4
         if: github.event_name != 'pull_request'
         with:
           cosign-release: v3.1.4
