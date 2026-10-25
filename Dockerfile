@@ -11,7 +11,7 @@ RUN jlink \
     --compress=2 \
     --output /jre
 
-FROM cgr.dev/chainguard/glibc-dynamic:latest
+FROM ghcr.io/morningstar-sudo/baseless-glibc:latest
 
 ENV JAVA_HOME=/opt/java
 ENV PATH="$JAVA_HOME/bin:$PATH"

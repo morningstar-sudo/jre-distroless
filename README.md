@@ -1,10 +1,10 @@
 # Java LTS Distroless Docker Images (17 / 21 / 25) — Zero CVE, Minimal JRE
 
-**Production-ready, zero-CVE Java base images for every LTS release (17, 21, 25)**: a jlink-trimmed Eclipse Temurin JRE on top of a Chainguard Wolfi distroless base. No shell, no package manager, no application code — just the Java runtime, running as a non-root user.
+**Production-ready, zero-CVE Java base images for every LTS release (17, 21, 25)**: a jlink-trimmed Eclipse Temurin JRE on top of the Baseless glibc runtime. No shell, no package manager, no application code — just the Java runtime, running as a non-root user.
 
 **Trivy scan result: 0 CVEs across all severities (CRITICAL / HIGH / MEDIUM / LOW).**
 
-Rebuilt and pushed **daily** by GitHub Actions, so the images always carry the latest Wolfi and Temurin security patches.
+Rebuilt and pushed **daily** by GitHub Actions, so the images always carry the latest Baseless and Temurin security patches.
 
 ## Tags
 
@@ -20,15 +20,15 @@ Each also gets an immutable `<version>-<sha>-<date>` tag per daily build.
 
 | | `eclipse-temurin:<v>-jre` | `gcr.io/distroless/java<v>-debian12` | **this image** |
 |---|---|---|---|
-| Base OS | Ubuntu | Debian 12 | Wolfi (Chainguard) |
+| Base OS | Ubuntu | Debian 12 | Baseless |
 | Typical Trivy findings | dozens | ~76 (2 CRITICAL)* | **0** |
 | Shell / package manager | yes | no | no |
-| Size | ~260 MB | ~230 MB | **~113 MB (~42 MB pull)** |
+| Size | ~260 MB | ~230 MB | **~81–91 MB (~46–52 MB pull)** |
 | Runs as non-root | no (root) | optional | yes (default) |
 
 \* measured July 2026; numbers drift as patches land.
 
-**How it gets to zero:** the JRE only needs glibc — libstdc++ is statically linked into HotSpot and zlib is bundled by Temurin. So the runtime sits on `cgr.dev/chainguard/glibc-dynamic`, a glibc-only distroless base that Chainguard patches within days. Even the most minimal Debian base (`cc-debian12`) permanently carries ~17 unfixed glibc/gcc CVEs; Debian-based images can never scan clean.
+**How it gets to zero:** the JRE only needs glibc — libstdc++ is statically linked into HotSpot and zlib is bundled by Temurin. The runtime therefore sits on `ghcr.io/morningstar-sudo/baseless-glibc`, a minimal glibc-only distroless base. Even the most minimal Debian base (`cc-debian12`) permanently carries long-lived unfixed findings that fail a strict zero-CVE policy.
 
 ## Quick start
 
@@ -93,7 +93,7 @@ trivy image --severity CRITICAL,HIGH,MEDIUM,LOW ghcr.io/morningstar-sudo/jre-dis
 ## How it works
 
 1. **Build stage** (`eclipse-temurin:<JAVA_VERSION>-jdk`, one per LTS via a CI matrix): `jlink` assembles a minimal JRE from the named modules with `--strip-debug --no-man-pages --no-header-files --compress=2`.
-2. **Runtime stage** (`cgr.dev/chainguard/glibc-dynamic`): the JRE is copied to `/opt/java`. The base ships only glibc and CA certificates — no shell, no coreutils, no package manager, non-root by default. Attack surface is the JVM itself.
+2. **Runtime stage** (`ghcr.io/morningstar-sudo/baseless-glibc`): the JRE is copied to `/opt/java`. The base ships only the Baseless filesystem layout, glibc, CA certificates and timezone data — no shell, no coreutils, no package manager, non-root by default. Attack surface is the JVM itself.
 
 CI (`.github/workflows/build.yml`) builds a matrix of Java 17 / 21 / 25 on every push and PR, on a daily cron, and on manual dispatch, pushing to the registry from `main`.
 
@@ -103,7 +103,7 @@ CI (`.github/workflows/build.yml`) builds a matrix of Java 17 / 21 / 25 on every
 It ships native graphics/font libraries (expat, glib, harfbuzz, libpng, lcms) that a headless server JRE never loads. In July 2026 it scanned at 76 CVEs, 2 CRITICAL. This image keeps the `java.desktop` **module** (needed for `java.beans` / Spring) but drops all the native graphics libraries — and their CVEs.
 
 **Why can a Debian-based image never reach zero CVEs?**
-Debian marks many low-risk glibc/gcc CVEs as `affected`/`will_not_fix`, so scanners flag them forever regardless of updates. Wolfi rebuilds patched packages continuously, which is why Chainguard-based images scan clean.
+Debian marks many low-risk glibc/gcc CVEs as `affected`/`will_not_fix`, so scanners flag them forever regardless of updates. Baseless rebuilds its minimal runtime directly from pinned upstream sources and blocks publication when its security gate fails.
 
 **How do I debug a container with no shell?**
 `docker debug <container>` (Docker Desktop), or `kubectl debug` with an ephemeral container on Kubernetes. The production image stays shell-free.
@@ -112,15 +112,15 @@ Debian marks many low-risk glibc/gcc CVEs as `affected`/`will_not_fix`, so scann
 Yes — any fat-jar server app; the default module set already covers the common Spring Boot stack (web, JPA, security, mail, JDBC). Check exact modules with `jdeps` and pass them via `JAVA_MODULES` to trim. GUI/rendering workloads (AWT, Swing, image processing) need a base that provides fontconfig/freetype, e.g. `gcr.io/distroless/java-base-debian12`, accepting its CVEs.
 
 **How do I keep it at zero CVEs over time?**
-Rebuild regularly (the daily cron does this). For reproducible builds, pin both `FROM` images by digest (`@sha256:...`) and let Renovate/Dependabot bump the digests. Note the Chainguard free tier only offers the `latest` tag, which makes digest pinning more important.
+Rebuild regularly (the daily cron does this). For reproducible builds, pin both `FROM` images by digest (`@sha256:...`) and let Renovate/Dependabot bump the digests.
 
 **Is it really distroless?**
 Yes: no shell, no package manager, no coreutils. `docker run --rm --entrypoint /bin/sh ghcr.io/morningstar-sudo/jre-distroless:21` fails — there is nothing to execute except `java`.
 
 ## Keywords
 
-Java 17 21 25 distroless Docker image · zero CVE Java base image · minimal JRE container · jlink custom runtime · Chainguard Wolfi Java · secure Java Docker image · Temurin 17 21 25 LTS distroless · hardened JRE base image
+Java 17 21 25 distroless Docker image · zero CVE Java base image · minimal JRE container · jlink custom runtime · Baseless Java · secure Java Docker image · Temurin 17 21 25 LTS distroless · hardened JRE base image
 
 ## License
 
-Apache-2.0 (same as Temurin and Wolfi components it assembles). See upstream: [Eclipse Temurin](https://adoptium.net/), [Chainguard Images](https://images.chainguard.dev/), [Google Distroless](https://github.com/GoogleContainerTools/distroless).
+Apache-2.0. See upstream: [Eclipse Temurin](https://adoptium.net/) and [Baseless](https://github.com/morningstar-sudo/baseless).
