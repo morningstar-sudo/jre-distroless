@@ -10,16 +10,26 @@ on:
   workflow_dispatch:
 
 jobs:
+  # Each architecture builds and scans natively on its own runner (no QEMU)
+  # and pushes an untagged per-architecture image; merge joins them by digest
+  # and applies the only tags: latest and <sha>-<date>.
   build:
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.platform.runner }}
     permissions:
       contents: read
       packages: write
-      id-token: write
     strategy:
       fail-fast: false
       matrix:
         java: [17, 21, 25]
+        platform:
+          - { arch: amd64, runner: ubuntu-24.04 }
+          - { arch: arm64, runner: ubuntu-24.04-arm }
+    env:
+      BUILD_ARGS: |
+        JAVA_VERSION=${{ matrix.java }}
+        CACHE_BUST=${{ github.run_id }}-${{ github.run_attempt }}
+      CACHE_SCOPE: java-${{ matrix.java }}-${{ matrix.platform.arch }}
     steps:
       - uses: actions/checkout@v4
 
@@ -28,8 +38,6 @@ jobs:
         run: echo "name=${RAW_NAME,,}" >> "$GITHUB_OUTPUT"
         env:
           RAW_NAME: ghcr.io/${{ github.repository }}-${{ matrix.java }}
-
-      - uses: docker/setup-qemu-action@v3
 
       - uses: docker/setup-buildx-action@v3
 
@@ -40,28 +48,18 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Docker metadata
-        id: meta
-        uses: docker/metadata-action@v5
-        with:
-          images: ${{ steps.image.outputs.name }}
-          tags: |
-            type=raw,value=latest,enable={{is_default_branch}}
-            type=raw,value={{sha}}-{{date 'DDMMYYYY'}},enable={{is_default_branch}}
-
-      - name: Build image for scan (amd64)
+      - name: Build image for scan
         uses: docker/build-push-action@v6
         with:
           context: .
           file: ./Dockerfile
-          build-args: |
-            JAVA_VERSION=${{ matrix.java }}
-            CACHE_BUST=${{ github.run_id }}-${{ github.run_attempt }}
+          platforms: linux/${{ matrix.platform.arch }}
+          build-args: ${{ env.BUILD_ARGS }}
           pull: true
           load: true
           tags: local/scan-${{ matrix.java }}
-          cache-from: type=gha,scope=java-${{ matrix.java }}
-          cache-to: type=gha,mode=max,scope=java-${{ matrix.java }}
+          cache-from: type=gha,scope=${{ env.CACHE_SCOPE }}
+          cache-to: type=gha,mode=max,scope=${{ env.CACHE_SCOPE }}
 
       - name: Vulnerability gate (Trivy)
         uses: aquasecurity/trivy-action@master
@@ -71,48 +69,102 @@ jobs:
           ignore-unfixed: false
           exit-code: "1"
 
-      - name: Build and push (multi-arch)
+      - name: Push by digest
         id: push
+        if: github.event_name != 'pull_request'
         uses: docker/build-push-action@v6
         with:
           context: .
           file: ./Dockerfile
-          platforms: linux/amd64,linux/arm64
-          push: ${{ github.event_name != 'pull_request' }}
-          build-args: |
-            JAVA_VERSION=${{ matrix.java }}
-            CACHE_BUST=${{ github.run_id }}-${{ github.run_attempt }}
+          platforms: linux/${{ matrix.platform.arch }}
+          build-args: ${{ env.BUILD_ARGS }}
           pull: true
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
-          annotations: ${{ steps.meta.outputs.annotations }}
+          labels: |
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+          outputs: type=image,name=${{ steps.image.outputs.name }},push-by-digest=true,name-canonical=true,push=true
           provenance: mode=max
-          cache-from: type=gha,scope=java-${{ matrix.java }}
-          cache-to: type=gha,mode=max,scope=java-${{ matrix.java }}
+          cache-from: type=gha,scope=${{ env.CACHE_SCOPE }}
+
+      - name: Export digest
+        if: steps.push.outputs.digest != ''
+        env:
+          DIGEST: ${{ steps.push.outputs.digest }}
+        run: |
+          mkdir -p digests
+          touch "digests/${DIGEST#sha256:}"
+
+      - uses: actions/upload-artifact@v4
+        if: steps.push.outputs.digest != ''
+        with:
+          name: digests-${{ matrix.java }}-${{ matrix.platform.arch }}
+          path: digests/*
+          if-no-files-found: error
+          retention-days: 1
+
+  merge:
+    needs: build
+    # Run even when another matrix cell failed; a variant missing an
+    # architecture fails its own merge below instead of blocking the rest.
+    if: ${{ !cancelled() && github.ref == format('refs/heads/{0}', github.event.repository.default_branch) }}
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+    strategy:
+      fail-fast: false
+      matrix:
+        java: [17, 21, 25]
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: digests-${{ matrix.java }}-*
+          path: digests
+          merge-multiple: true
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Create multi-arch manifest
+        id: manifest
+        env:
+          NAME: ghcr.io/${{ github.repository }}-${{ matrix.java }}
+        run: |
+          set -euo pipefail
+          image="${NAME,,}"
+          tags=("${image}:${GITHUB_SHA::7}-$(date -u +%d%m%Y)" "${image}:latest")
+          sources=()
+          for file in digests/*; do
+            sources+=("${image}@sha256:${file##*/}")
+          done
+          test "${#sources[@]}" -eq 2
+          docker buildx imagetools create "${tags[@]/#/--tag=}" "${sources[@]}"
+          digest="$(docker buildx imagetools inspect "${tags[0]}" --format '{{json .Manifest}}' | jq -r .digest)"
+          echo "image=${image}" >> "${GITHUB_OUTPUT}"
+          echo "digest=${digest}" >> "${GITHUB_OUTPUT}"
 
       - uses: sigstore/cosign-installer@v4.1.2
-        if: github.event_name != 'pull_request'
         with:
           cosign-release: v3.1.4
 
       - uses: anchore/sbom-action/download-syft@v0
-        if: github.event_name != 'pull_request'
 
       - name: Sign image and attest SBOM
-        if: github.event_name != 'pull_request'
         env:
-          IMAGE: ${{ steps.image.outputs.name }}
-          DIGEST: ${{ steps.push.outputs.digest }}
+          IMAGE: ${{ steps.manifest.outputs.image }}
+          DIGEST: ${{ steps.manifest.outputs.digest }}
         run: |
           set -euo pipefail
           platform_digests="$(docker buildx imagetools inspect --raw "${IMAGE}@${DIGEST}" |
-            jq -r '.manifests[]? | select(.platform.os == "linux") | .digest')"
-          for digest in ${platform_digests:-${DIGEST}}; do
+            jq -r '.manifests[] | select(.platform.os == "linux") | .digest')"
+          for digest in ${platform_digests}; do
             syft "${IMAGE}@${digest}" -o spdx-json=sbom.spdx.json
             cosign attest --yes \
               --type spdxjson --predicate sbom.spdx.json "${IMAGE}@${digest}"
             cosign sign --yes --registry-referrers-mode=legacy "${IMAGE}@${digest}"
           done
-          if [ -n "${platform_digests}" ]; then
-            cosign sign --yes --registry-referrers-mode=legacy "${IMAGE}@${DIGEST}"
-          fi
+          cosign sign --yes --registry-referrers-mode=legacy "${IMAGE}@${DIGEST}"
