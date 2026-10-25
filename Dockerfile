@@ -2,8 +2,9 @@ ARG JAVA_VERSION=17
 FROM eclipse-temurin:${JAVA_VERSION}-jdk AS jre-build
 
 ARG JAVA_MODULES=java.base,java.compiler,java.desktop,java.logging,java.xml,java.naming,java.sql,java.sql.rowset,java.transaction.xa,java.net.http,java.management,java.security.jgss,java.security.sasl,java.instrument,jdk.crypto.ec,jdk.crypto.cryptoki,jdk.unsupported,jdk.management,jdk.net,jdk.zipfs,jdk.charsets,jdk.jfr
+ARG CACHE_BUST=local
 
-RUN jlink \
+RUN test -n "$CACHE_BUST" && jlink \
     --add-modules "$JAVA_MODULES" \
     --strip-debug \
     --no-man-pages \

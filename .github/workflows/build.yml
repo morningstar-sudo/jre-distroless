@@ -53,7 +53,10 @@ jobs:
         with:
           context: .
           file: ./Dockerfile
-          build-args: JAVA_VERSION=${{ matrix.java }}
+          build-args: |
+            JAVA_VERSION=${{ matrix.java }}
+            CACHE_BUST=${{ github.run_id }}-${{ github.run_attempt }}
+          pull: true
           load: true
           tags: local/scan-${{ matrix.java }}
           cache-from: type=gha,scope=java-${{ matrix.java }}
@@ -74,7 +77,10 @@ jobs:
           file: ./Dockerfile
           platforms: linux/amd64,linux/arm64
           push: ${{ github.event_name != 'pull_request' }}
-          build-args: JAVA_VERSION=${{ matrix.java }}
+          build-args: |
+            JAVA_VERSION=${{ matrix.java }}
+            CACHE_BUST=${{ github.run_id }}-${{ github.run_attempt }}
+          pull: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           annotations: ${{ steps.meta.outputs.annotations }}
